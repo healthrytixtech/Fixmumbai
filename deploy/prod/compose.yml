@@ -1,0 +1,26 @@
+services:
+  prisehat-pulse-production:
+    image: ghcr.io/healthrytixtech/fixmumbai:${IMAGE_TAG:?set IMAGE_TAG in .env to a commit SHA}
+    container_name: prisehat-pulse-production
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      NODE_ENV: production
+
+    volumes:
+      # host path comes from UPLOADS_DIR in this directory's .env
+      - ${UPLOADS_DIR:?set UPLOADS_DIR in .env}:/app/public/uploads
+
+    networks:
+      - app_network
+
+    expose:
+      - "3000"
+
+networks:
+  app_network:
+    external: true
+    name: ${DOCKER_NETWORK:?set DOCKER_NETWORK in .env}

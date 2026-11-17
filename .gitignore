@@ -20,6 +20,9 @@ yarn-error.log*
 .env
 *.env.local
 
+# local env from deploy folder
+deploy/**/.env
+
 # vercel
 .vercel
 
@@ -33,3 +36,4 @@ next-env.d.ts
 # User uploaded photos - never commit
 public/uploads/
 /uploads/
+deploy/**/uploads/

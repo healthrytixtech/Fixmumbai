@@ -42,3 +42,6 @@ docker-compose.yml
 
 # Runtime user uploads (created at runtime by the API route)
 public/uploads
+
+# deploy folder
+deploy/

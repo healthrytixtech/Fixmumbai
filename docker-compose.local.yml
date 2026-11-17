@@ -15,7 +15,8 @@ services:
       NODE_ENV: production
 
     volumes:
-      - /root/Fixmumbai/uploads:/app/public/uploads
+      # host path comes from UPLOADS_DIR in .env (defaults to ./uploads)
+      - ${UPLOADS_DIR:-./uploads}:/app/public/uploads
 
     networks:
       - app_network
