@@ -95,3 +95,89 @@ jobs:
 
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy-staging:
+    name: Deploy to staging
+    needs: publish-image
+
+    # Same gate as publish-image: only after a successful push to main.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    # Deploys queue instead of overlapping or cancelling a half-finished one.
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+
+    env:
+      STAGE_DIR: ${{ vars.STAGE_DIR }}
+      STAGE_HEALTH_URL: ${{ vars.STAGE_HEALTH_URL }}
+      SSH_TARGET: ${{ secrets.STAGE_SSH_USER }}@${{ secrets.STAGE_SSH_HOST }}
+      IMAGE_TAG: ${{ github.sha }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.STAGE_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.STAGE_SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          # Pinned host key, key-only auth, never prompt.
+          cat > ~/.ssh/config <<'CFG'
+          Host *
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            BatchMode yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+          CFG
+
+      - name: Copy compose file to VPS
+        run: scp deploy/stage/compose.yml "$SSH_TARGET:$STAGE_DIR/compose.yml"
+
+      - name: Deploy image on VPS
+        run: |
+          ssh "$SSH_TARGET" "STAGE_DIR='$STAGE_DIR' IMAGE_TAG='$IMAGE_TAG' bash -se" <<'REMOTE'
+          cd "$STAGE_DIR"
+
+          # Record what was running so a rollback target is in the log.
+          prev=$(grep -E '^IMAGE_TAG=' .env | cut -d= -f2- || true)
+          echo "Previous IMAGE_TAG: ${prev:-<none>}"
+          echo "New IMAGE_TAG:      $IMAGE_TAG"
+
+          # Update the line, or add it if it is missing.
+          if grep -qE '^IMAGE_TAG=' .env; then
+            sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=$IMAGE_TAG/" .env
+          else
+            printf '\nIMAGE_TAG=%s\n' "$IMAGE_TAG" >> .env
+          fi
+
+          docker compose pull
+          docker compose up -d
+          REMOTE
+
+      - name: Wait for health check
+        run: |
+          for i in $(seq 1 18); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$STAGE_HEALTH_URL" || true)
+            echo "attempt $i: HTTP $code"
+            if [ "$code" = "200" ]; then
+              echo "Staging is healthy on $IMAGE_TAG"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Health check failed; recent container logs:"
+          ssh "$SSH_TARGET" "cd '$STAGE_DIR' && docker compose logs --tail=100" || true
+          exit 1
